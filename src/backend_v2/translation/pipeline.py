@@ -241,6 +241,28 @@ def _config_boolean(config: Mapping[str, Any], field: str) -> bool:
     return value
 
 
+def _config_optional_integer(
+    config: Mapping[str, Any],
+    field: str,
+    *,
+    default: int = 0,
+    minimum: int = 0,
+    maximum: int = 16384,
+) -> int:
+    value = config.get(field, default)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < minimum
+        or value > maximum
+    ):
+        raise ValueError(
+            f"translation configuration {field} must be an integer from "
+            f"{minimum} to {maximum}"
+        )
+    return value
+
+
 def _validate_hq_request_pages(
     pages: list[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -1225,6 +1247,13 @@ class CoreTranslationAlgorithms:
             config,
             "compress_vision_images",
         )
+        vision_image_max_edge = _config_optional_integer(
+            config,
+            "vision_image_max_edge",
+            default=0,
+            minimum=0,
+            maximum=16384,
+        )
         task_instruction = (
             "结合原图、原文、当前译文和相邻页面上下文改进已有译文。"
             if mode == "proofread"
@@ -1265,6 +1294,7 @@ class CoreTranslationAlgorithms:
             image_base64, image_media_type = encode_vision_image(
                 image,
                 compress=compress_vision_images,
+                max_edge=vision_image_max_edge or None,
             )
             content.extend(
                 (

@@ -62,7 +62,8 @@ def call_ai_vision_ocr_service(image_pil, provider='siliconflow', api_key=None, 
                                custom_base_url=None,
                                openai_options: OpenAICompatibleOptions | None = None,
                                credential_version_id: str | None = None,
-                               compress_vision_images: bool = True):
+                               compress_vision_images: bool = True,
+                               vision_image_max_edge: int | None = None):
     if not isinstance(image_pil, Image.Image):
         raise ValueError("未提供有效图像")
     if prompt_mode not in {"normal", "json", "paddleocr_vl"}:
@@ -75,6 +76,7 @@ def call_ai_vision_ocr_service(image_pil, provider='siliconflow', api_key=None, 
         image_base64, image_media_type = encode_vision_image(
             image_pil,
             compress=compress_vision_images,
+            max_edge=vision_image_max_edge,
         )
     except Exception as e:
         logger.error(f"图像转Base64失败: {e}", exc_info=True)

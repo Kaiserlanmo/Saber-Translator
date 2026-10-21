@@ -459,6 +459,9 @@ class SettingsResolver:
                         "compress_vision_images": effective[
                             "compressVisionImages"
                         ],
+                        "vision_image_max_edge": effective[
+                            "visionImageMaxEdge"
+                        ],
                         "prompt_content": self._translation_prompt(
                             selected_round,
                             mode=mode,
@@ -503,6 +506,9 @@ class SettingsResolver:
                 translation["batchSize"] = selected_translation["batchSize"]
                 translation["compress_vision_images"] = effective[
                     "compressVisionImages"
+                ]
+                translation["vision_image_max_edge"] = effective[
+                    "visionImageMaxEdge"
                 ]
             provider_revision_keys.append(
                 (

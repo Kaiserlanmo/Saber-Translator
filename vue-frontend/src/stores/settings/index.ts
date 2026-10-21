@@ -915,6 +915,7 @@ export const useSettingsStore = defineStore('settings', () => {
     setShowDetectionDebug: miscModule.setShowDetectionDebug,
     setRemoveTextWithOcr: miscModule.setRemoveTextWithOcr,
     setCompressVisionImages: miscModule.setCompressVisionImages,
+    setVisionImageMaxEdge: miscModule.setVisionImageMaxEdge,
     setLamaDisableResize: miscModule.setLamaDisableResize,
 
     setTheme,

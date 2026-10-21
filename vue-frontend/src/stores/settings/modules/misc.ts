@@ -35,6 +35,10 @@ export function useMiscSettings(
     settings.value.compressVisionImages = enabled
   }
 
+  function setVisionImageMaxEdge(maxEdge: number): void {
+    settings.value.visionImageMaxEdge = Math.max(0, Math.min(16384, Math.round(maxEdge)))
+  }
+
   function setLamaDisableResize(disabled: boolean): void {
     settings.value.lamaDisableResize = disabled
   }
@@ -47,6 +51,7 @@ export function useMiscSettings(
     setShowDetectionDebug,
     setRemoveTextWithOcr,
     setCompressVisionImages,
+    setVisionImageMaxEdge,
     setLamaDisableResize
   }
 }

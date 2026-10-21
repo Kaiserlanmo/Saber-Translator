@@ -58,6 +58,22 @@
           @change="settingsStore.setCompressVisionImages"
         />
       </UiField>
+      <UiField
+        variant="settings"
+        label="压缩时长边上限"
+        control-id="settingsVisionImageMaxEdge"
+        hint="仅在开启压缩时生效。长边超过该值的图片会按比例缩小，短边同步缩放；0 表示不限制。高质量翻译和 AI 校对使用此设置，长条图可调到 8192 或更大。缩放仅在内存中完成，不会产生缓存文件。"
+      >
+        <UiNumberField
+          input-id="settingsVisionImageMaxEdge"
+          :model-value="settingsStore.settings.visionImageMaxEdge ?? 2048"
+          :min="0"
+          :max="16384"
+          :step="256"
+          :disabled="!settingsStore.settings.compressVisionImages"
+          @update:model-value="settingsStore.setVisionImageMaxEdge($event ?? 0)"
+        />
+      </UiField>
     </ProductFormSection>
 
     <ProductFormSection>
@@ -167,6 +183,7 @@ import ProductFormSection from '@/components/product/ProductFormSection.vue'
 import UiFileInput from '@/components/ui/UiFileInput.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiCheckbox from '@/components/ui/UiCheckbox.vue'
+import UiNumberField from '@/components/ui/UiNumberField.vue'
 import { computed, ref } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import {

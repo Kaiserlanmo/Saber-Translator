@@ -514,6 +514,12 @@ def _validate_translation(payload: dict[str, Any]) -> None:
         "translation.hqTranslation.batchSize",
         minimum=1,
     )
+    _integer(
+        payload["visionImageMaxEdge"],
+        "translation.visionImageMaxEdge",
+        minimum=0,
+        maximum=16384,
+    )
 
 
 def _validate_workflow_preferences(payload: dict[str, Any]) -> None:
@@ -1064,6 +1070,11 @@ def compose_editable_settings(
         }
     if domain == "translation":
         defaults = default_translation_settings()
+        # 旧版本保存的设置没有新字段，补默认值后再做严格形状校验。
+        if "visionImageMaxEdge" not in result:
+            result["visionImageMaxEdge"] = deepcopy(
+                defaults["visionImageMaxEdge"]
+            )
         for section, provider_domain in TRANSLATION_PROVIDER_SECTIONS.items():
             selected = _object(result[section], f"translation.{section}")
             fields = _PROVIDER_PAYLOAD_FIELDS_BY_DOMAIN[provider_domain]

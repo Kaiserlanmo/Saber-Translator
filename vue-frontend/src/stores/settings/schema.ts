@@ -302,6 +302,7 @@ export function parseCurrentSettings(value: unknown): TranslationSettings | null
   if (!isIntegerRange(sanitized.parallel.deepLearningLockSize, 1)) return null
   sanitized.parallel.deepLearningLockSize = Math.min(sanitized.parallel.deepLearningLockSize, MAX_DEEP_LEARNING_CONCURRENCY)
   if (!isIntegerRange(sanitized.hqTranslation.batchSize, 1)) return null
+  if (!isIntegerRange(sanitized.visionImageMaxEdge, 0, 16384)) return null
   const rounds = sanitizeProofreadingRounds((value.proofreading as PlainRecord).rounds)
   if (!rounds) return null
   sanitized.proofreading.rounds = rounds

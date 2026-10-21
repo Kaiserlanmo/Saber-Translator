@@ -839,6 +839,13 @@ def _validate_ai_provider_section(
         and not isinstance(section.get("compress_vision_images"), bool)
     ):
         raise ValueError(f"{label}图片压缩开关必须是布尔值")
+    vision_image_max_edge = section.get("vision_image_max_edge")
+    if vision_image_max_edge is not None and (
+        isinstance(vision_image_max_edge, bool)
+        or not isinstance(vision_image_max_edge, int)
+        or not 0 <= vision_image_max_edge <= 16384
+    ):
+        raise ValueError(f"{label}视觉模型图片长边上限必须是 0 到 16384 的整数")
 
 
 def _validate_ocr_section(value: object) -> None:

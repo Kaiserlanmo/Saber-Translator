@@ -110,6 +110,7 @@ export interface TranslationSettings {
   parallel: ParallelSettings
   removeTextWithOcr: boolean
   compressVisionImages: boolean
+  visionImageMaxEdge: number
   lamaDisableResize: boolean
   lamaRegionalInpainting: boolean
 }

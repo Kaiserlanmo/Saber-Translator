@@ -270,6 +270,7 @@ def default_translation_settings() -> dict[str, object]:
         "parallel": {"enabled": False, "deepLearningLockSize": 1},
         "removeTextWithOcr": False,
         "compressVisionImages": True,
+        "visionImageMaxEdge": 2048,
         "lamaDisableResize": False,
         "lamaRegionalInpainting": False,
     }
