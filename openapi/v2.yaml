@@ -8564,11 +8564,21 @@ components:
     TranslationGlossarySettings:
       type: object
       additionalProperties: false
-      required: [enabled, autoExtractEnabled, autoExtractPrompt, entries]
+      required:
+        - enabled
+        - autoExtractEnabled
+        - autoExtractPrompt
+        - autoExtractBatchPages
+        - hqAutoFillEnabled
+        - hqAutoFillPrompt
+        - entries
       properties:
         enabled: {type: boolean}
         autoExtractEnabled: {type: boolean}
         autoExtractPrompt: {type: string, maxLength: 100000}
+        autoExtractBatchPages: {type: integer, minimum: 1, maximum: 50}
+        hqAutoFillEnabled: {type: boolean}
+        hqAutoFillPrompt: {type: string, maxLength: 100000}
         entries:
           type: array
           items: {$ref: "#/components/schemas/TranslationGlossaryEntry"}

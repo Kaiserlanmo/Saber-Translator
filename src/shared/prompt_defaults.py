@@ -22,6 +22,7 @@ _REQUIRED_KEYS = frozenset(
         "hqTranslation",
         "proofreading",
         "autoGlossary",
+        "hqGlossary",
         "webImportExtraction",
     }
 )

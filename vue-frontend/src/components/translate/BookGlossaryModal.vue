@@ -57,6 +57,60 @@
           重置为默认提示词
         </UiButton>
       </ProductActionRow>
+      <UiField
+        variant="dialog"
+        label="自动术语提取批次页数"
+        control-id="autoGlossaryBatchPages"
+        hint="高质量翻译会按该页数把多页 OCR 文本合并成一次术语提取请求；1 表示逐页。"
+      >
+        <UiNumberField
+          input-id="autoGlossaryBatchPages"
+          :model-value="draft.autoExtractBatchPages"
+          :min="1"
+          :max="50"
+          :step="1"
+          :disabled="!draft.autoExtractEnabled || draft.hqAutoFillEnabled"
+          @update:model-value="updateAutoExtractBatchPages($event ?? 5)"
+        />
+      </UiField>
+      <UiCheckbox
+        :model-value="draft.hqAutoFillEnabled"
+        label="高质量翻译时同时填写术语表"
+        @change="toggleHqAutoFillEnabled"
+      />
+      <ProductStatusBanner class="constraint-modal-body__description" tone="neutral" role="note">
+        开启后会自动关闭“自动添加术语”，由高质量翻译在回传译文时一并提出术语，
+        避免并行页面重复写入或给出互相矛盾的译法。
+      </ProductStatusBanner>
+      <UiField
+        variant="dialog"
+        label="高质量翻译术语提示词"
+        control-id="hqGlossaryPrompt"
+        hint="只控制术语的选取与译法（例如音译、意译、参考图片内容），不会修改高质量翻译主提示词。"
+      >
+        <UiTextarea
+          id="hqGlossaryPrompt"
+          :model-value="draft.hqAutoFillPrompt"
+          variant="panel"
+          :rows="6"
+          placeholder="请输入高质量翻译时填写术语表的提示词"
+          @update:model-value="updateHqAutoFillPrompt"
+        />
+      </UiField>
+      <ProductActionRow
+        class="constraint-modal-body__reset-row"
+        aria-label="高质量翻译术语提示词操作"
+      >
+        <UiButton
+          type="button"
+          variant="secondary"
+          size="sm"
+          block
+          @click="resetHqAutoFillPrompt"
+        >
+          重置为默认提示词
+        </UiButton>
+      </ProductActionRow>
       <TranslationConstraintTable
         :model-value="draft.entries"
         :columns="columns"
@@ -91,10 +145,14 @@ import ProductActionRow from '@/components/product/ProductActionRow.vue'
 import ProductStatusBanner from '@/components/product/ProductStatusBanner.vue'
 import UiCheckbox from '@/components/ui/UiCheckbox.vue'
 import UiField from '@/components/ui/UiField.vue'
+import UiNumberField from '@/components/ui/UiNumberField.vue'
 import UiTextarea from '@/components/ui/UiTextarea.vue'
 import { computed, ref, watch } from 'vue'
 
-import { DEFAULT_AUTO_GLOSSARY_PROMPT } from '@/constants'
+import {
+  DEFAULT_AUTO_GLOSSARY_PROMPT,
+  DEFAULT_HQ_GLOSSARY_PROMPT,
+} from '@/constants'
 import BaseModal from '@/components/common/BaseModal.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 import TranslationConstraintTable from '@/components/settings/shared/TranslationConstraintTable.vue'
@@ -102,6 +160,7 @@ import { useBookTranslationConstraintsStore } from '@/stores/bookTranslationCons
 import type { BookTranslationConstraints } from '@/types/bookTranslationConstraints'
 import type { GlossaryEntry } from '@/types/translationConstraints'
 import { deepClone } from '@/utils/deepClone'
+import { createEmptyBookTranslationConstraints } from '@/utils/bookTranslationConstraints'
 import { getStringField, validateRegexEntries } from '@/utils/translationConstraintTable'
 import { showToast } from '@/utils/toast'
 
@@ -113,12 +172,8 @@ const emit = defineEmits<{
 
 const constraintStore = useBookTranslationConstraintsStore()
 const isSaving = computed(() => constraintStore.isSaving)
-const draft = ref({
-  enabled: false,
-  autoExtractEnabled: false,
-  autoExtractPrompt: DEFAULT_AUTO_GLOSSARY_PROMPT,
-  entries: [] as GlossaryEntry[],
-})
+const defaultGlossary = createEmptyBookTranslationConstraints().glossary
+const draft = ref(deepClone(defaultGlossary))
 const lastSyncedBookId = ref<string | null>(null)
 const lastSyncedGlossary = ref<BookTranslationConstraints['glossary'] | null>(null)
 
@@ -186,7 +241,10 @@ watch(
 )
 
 function syncDraft(): void {
-  const latest = deepClone(constraintStore.glossary)
+  const latest = {
+    ...deepClone(defaultGlossary),
+    ...deepClone(constraintStore.glossary),
+  }
   draft.value = latest
   lastSyncedBookId.value = constraintStore.bookId
   lastSyncedGlossary.value = deepClone(latest)
@@ -197,7 +255,10 @@ function glossaryEntryKey(entry: GlossaryEntry): string {
 }
 
 function mergeLatestGlossary(): void {
-  const latest = deepClone(constraintStore.glossary)
+  const latest = {
+    ...deepClone(defaultGlossary),
+    ...deepClone(constraintStore.glossary),
+  }
   const previous = lastSyncedGlossary.value
   if (!previous || JSON.stringify(draft.value) === JSON.stringify(previous)) {
     draft.value = latest
@@ -226,6 +287,16 @@ function toggleEnabled(checked: boolean): void {
 
 function toggleAutoExtractEnabled(checked: boolean): void {
   draft.value.autoExtractEnabled = checked
+  if (checked) draft.value.hqAutoFillEnabled = false
+}
+
+function toggleHqAutoFillEnabled(checked: boolean): void {
+  draft.value.hqAutoFillEnabled = checked
+  if (checked) draft.value.autoExtractEnabled = false
+}
+
+function updateAutoExtractBatchPages(value: number): void {
+  draft.value.autoExtractBatchPages = Math.max(1, Math.min(50, Math.round(value)))
 }
 
 function updateAutoExtractPrompt(value: string): void {
@@ -234,6 +305,14 @@ function updateAutoExtractPrompt(value: string): void {
 
 function resetAutoExtractPrompt(): void {
   draft.value.autoExtractPrompt = DEFAULT_AUTO_GLOSSARY_PROMPT
+}
+
+function updateHqAutoFillPrompt(value: string): void {
+  draft.value.hqAutoFillPrompt = value
+}
+
+function resetHqAutoFillPrompt(): void {
+  draft.value.hqAutoFillPrompt = DEFAULT_HQ_GLOSSARY_PROMPT
 }
 
 function updateEntries(entries: object[]): void {

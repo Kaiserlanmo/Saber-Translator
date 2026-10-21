@@ -10,6 +10,7 @@ import logging
 import math
 from pathlib import Path
 import re
+import time
 from typing import Any, Protocol
 import uuid
 
@@ -118,10 +119,11 @@ class TranslationAlgorithms(Protocol):
 
     def extract_terms(
         self,
-        texts: list[str],
+        texts: object,
         config: Mapping[str, Any],
         *,
         prompt: str,
+        glossary_entries: list[Mapping[str, Any]] | None = None,
     ) -> Mapping[str, Any]: ...
 
     def translate(
@@ -1027,10 +1029,11 @@ class CoreTranslationAlgorithms:
 
     def extract_terms(
         self,
-        texts: list[str],
+        texts: object,
         config: Mapping[str, Any],
         *,
         prompt: str,
+        glossary_entries: list[Mapping[str, Any]] | None = None,
     ) -> Mapping[str, Any]:
         if not prompt.strip():
             raise ValueError("自动术语提取提示词为空，请填写提示词或关闭自动添加术语")
@@ -1044,17 +1047,27 @@ class CoreTranslationAlgorithms:
             parse_json_block_from_text,
         )
 
-        rendered_prompt = (
-            prompt.replace(
-                "{ocr_text}",
-                json.dumps(texts, ensure_ascii=False, separators=(",", ":")),
-            )
-            if "{ocr_text}" in prompt
-            else (
-                f"{prompt.rstrip()}\n\nOCR 文本：\n"
-                f"{json.dumps(texts, ensure_ascii=False, separators=(',', ':'))}"
-            )
+        ocr_payload = json.dumps(texts, ensure_ascii=False, separators=(",", ":"))
+        glossary_payload = json.dumps(
+            [dict(entry) for entry in (glossary_entries or [])],
+            ensure_ascii=False,
+            separators=(",", ":"),
         )
+        rendered_prompt = prompt
+        if "{ocr_text}" in rendered_prompt:
+            rendered_prompt = rendered_prompt.replace("{ocr_text}", ocr_payload)
+        else:
+            rendered_prompt = (
+                f"{rendered_prompt.rstrip()}\n\nOCR 文本：\n{ocr_payload}"
+            )
+        if "{glossary}" in rendered_prompt:
+            rendered_prompt = rendered_prompt.replace("{glossary}", glossary_payload)
+        elif glossary_entries:
+            rendered_prompt = (
+                f"{rendered_prompt.rstrip()}\n\n"
+                "已有术语表（必须沿用已有译法，不得为同一原文给出不同译法）：\n"
+                f"{glossary_payload}"
+            )
         provider = _config_string(config, "provider")
         api_key = _optional_config_string(config, "api_key")
         model_name = _config_string(config, "model_name")
@@ -1254,6 +1267,22 @@ class CoreTranslationAlgorithms:
             minimum=0,
             maximum=16384,
         )
+        hq_glossary_enabled = bool(config.get("hq_glossary_enabled"))
+        hq_glossary_prompt_value = config.get("hq_glossary_prompt", "")
+        if not isinstance(hq_glossary_prompt_value, str):
+            raise ValueError("translation configuration hq_glossary_prompt must be a string")
+        hq_glossary_prompt = hq_glossary_prompt_value.strip()
+        hq_glossary_entries_value = config.get("hq_glossary_entries", [])
+        if not isinstance(hq_glossary_entries_value, list):
+            raise ValueError("translation configuration hq_glossary_entries must be an array")
+        hq_glossary_entries = [
+            dict(entry)
+            for entry in hq_glossary_entries_value
+            if isinstance(entry, Mapping)
+        ][:200]
+        if hq_glossary_enabled and not hq_glossary_prompt:
+            hq_glossary_enabled = False
+        glossary_sink: list[dict[str, str]] = []
         task_instruction = (
             "结合原图、原文、当前译文和相邻页面上下文改进已有译文。"
             if mode == "proofread"
@@ -1272,6 +1301,17 @@ class CoreTranslationAlgorithms:
             "完整返回输入中的每一个 pageId 和 bubbleId，各出现一次；"
             "不得遗漏、增加、重复或修改 ID，不得增加其他字段。"
         )
+        if hq_glossary_enabled:
+            system_prompt = system_prompt.replace(
+                "不得遗漏、增加、重复或修改 ID，不得增加其他字段。",
+                "不得遗漏、增加、重复或修改 ID，除 pages 和 glossary 外不得增加其他字段。",
+            )
+            system_prompt += (
+                "\n\n【术语表输出】\n"
+                '在 JSON 对象中增加 "glossary" 数组，每项严格使用 '
+                '{"source":"原文","target":"译文","note":"可选备注"}；'
+                "glossary 可以为空数组。"
+            )
         content: list[dict[str, Any]] = [
             {
                 "type": "text",
@@ -1290,6 +1330,17 @@ class CoreTranslationAlgorithms:
                 + "\n\n每个页面数据块后紧跟该页面的原图。",
             }
         ]
+        if hq_glossary_enabled:
+            content[0]["text"] += (
+                "\n\n【术语表任务】\n"
+                + hq_glossary_prompt
+                + "\n\n已有术语表（必须沿用，不得为同一原文给出不同译法）：\n"
+                + json.dumps(
+                    hq_glossary_entries,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
         for page, image in zip(wire_pages, images):
             image_base64, image_media_type = encode_vision_image(
                 image,
@@ -1336,6 +1387,26 @@ class CoreTranslationAlgorithms:
         def parse(raw: str) -> dict[str, dict[str, str]]:
             try:
                 payload = parse_json_block_from_text(raw)
+                glossary_sink.clear()
+                if not isinstance(payload, Mapping) or "pages" not in payload:
+                    raise ValueError(
+                        "HQ response must contain a pages array"
+                    )
+                if hq_glossary_enabled:
+                    raw_glossary = payload.get("glossary", [])
+                    if raw_glossary is None:
+                        raw_glossary = []
+                    try:
+                        glossary_sink.extend(
+                            _normalize_term_candidates(raw_glossary)
+                        )
+                    except ValueError as exc:
+                        # 术语表是附加信息，格式异常不应导致整批翻译失败。
+                        LOGGER.warning("高质量翻译返回的术语表无效，已忽略：%s", exc)
+                        glossary_sink.clear()
+                # 只把 pages 交给严格校验；额外字段（包括未启用时的 glossary）
+                # 一律忽略，避免模型多返回一个字段就导致整批翻译失败。
+                payload = {"pages": payload["pages"]}
                 wire_result = _validate_stable_batch_result(
                     payload,
                     expected_pages=wire_pages,
@@ -1373,6 +1444,7 @@ class CoreTranslationAlgorithms:
             "rawContent": result.raw_content,
             "pages": result.parsed,
             "mode": mode,
+            "glossary": list(glossary_sink),
         }
 
     def repair(
@@ -1606,6 +1678,17 @@ class TranslationPipelineService:
         if not prepared:
             return {"__already_published__": True, "skipped": len(steps)}
 
+        try:
+            self._extract_batch_glossary(
+                fence,
+                prepared,
+                config,
+                mode=mode,
+            )
+        except Exception as exc:  # noqa: BLE001 - glossary must not block translation
+            LOGGER.warning("批量术语提取初始化失败，已跳过：%s", exc)
+            log_result("批量术语提取初始化失败，已跳过", [str(exc)])
+
         constraint_contexts = [
             {
                 "pageId": snapshot.page_id,
@@ -1624,6 +1707,19 @@ class TranslationPipelineService:
             section,
             constraint_contexts=constraint_contexts,
         )
+        glossary_context = constraint_contexts[0]["constraints"]["glossary"]
+        if mode == "hq_translate" and bool(glossary_context.get("hqAutoFillEnabled")):
+            section["hq_glossary_enabled"] = True
+            section["hq_glossary_prompt"] = str(
+                glossary_context.get("hqAutoFillPrompt") or ""
+            )
+            section["hq_glossary_entries"] = [
+                dict(entry)
+                for entry in glossary_context.get("entries", [])
+                if isinstance(entry, Mapping)
+            ][:200]
+        else:
+            section["hq_glossary_enabled"] = False
         images: list[Image.Image] = []
         request_pages: list[dict[str, Any]] = []
         try:
@@ -1882,12 +1978,165 @@ class TranslationPipelineService:
                         details=[json.dumps(value, ensure_ascii=False) for value in warnings],
                     )
             completed += 1
+        glossary_candidates = result.get("glossary")
+        glossary_added = 0
+        if isinstance(glossary_candidates, list) and glossary_candidates:
+            glossary_added = self._merge_glossary_candidates(
+                fence,
+                glossary_candidates,
+            )
+            if glossary_added:
+                log_result(
+                    f"高质量翻译同时填写术语表｜新增 {glossary_added} 条",
+                )
         return {
             "__already_published__": True,
             "batchId": batch_id,
             "completed": completed,
             "rawAssetId": raw_asset.id,
+            "glossaryAdded": glossary_added,
         }
+
+    def _extract_batch_glossary(
+        self,
+        fence: AttemptFence,
+        prepared: list[
+            tuple[Mapping[str, Any], PageSnapshot, list[dict[str, Any]]]
+        ],
+        config: Mapping[str, Any],
+        *,
+        mode: str,
+    ) -> None:
+        """Extract glossary terms for the whole HQ batch before translating it."""
+
+        if mode != "hq_translate" or not prepared:
+            return
+        constraints = self._effective_constraints(
+            prepared[0][0],
+            include_current_page=False,
+        )
+        glossary = constraints["glossary"]
+        if bool(glossary["hqAutoFillEnabled"]):
+            return
+        if not bool(glossary["autoExtractEnabled"]):
+            return
+        prompt = str(glossary["autoExtractPrompt"])
+        if not prompt.strip():
+            return
+        batch_pages = int(glossary["autoExtractBatchPages"])
+        glossary_entries = list(glossary["entries"])
+        section = self._with_credential(config.get("translation"))
+        for start in range(0, len(prepared), batch_pages):
+            chunk = prepared[start : start + batch_pages]
+            texts_by_page: list[dict[str, Any]] = []
+            for step, snapshot, _bubbles in chunk:
+                page_texts = [
+                    _payload_text(
+                        payload,
+                        "originalText",
+                        label="persisted original text",
+                    ).strip()
+                    for payload in snapshot.bubbles
+                ]
+                page_texts = [text for text in page_texts if text]
+                if page_texts:
+                    texts_by_page.append(
+                        {
+                            "page": _step_page_number(step),
+                            "texts": page_texts,
+                        }
+                    )
+            if not texts_by_page:
+                continue
+            try:
+                result = self.algorithms.extract_terms(
+                    texts_by_page,
+                    section,
+                    prompt=prompt,
+                    glossary_entries=glossary_entries,
+                )
+                result = _require_result_mapping(
+                    result,
+                    label="batch automatic term extraction result",
+                )
+                candidates = _normalize_term_candidates(
+                    result.get("candidates")
+                )
+                added = self._merge_glossary_candidates(fence, candidates)
+                if added:
+                    log_result(
+                        f"批次术语提取完成｜新增 {added} 条",
+                    )
+            except Exception as exc:  # noqa: BLE001 - glossary must not block translation
+                LOGGER.warning("批量术语提取失败，已跳过本批：%s", exc)
+                log_result(
+                    "批量术语提取失败，已跳过本批",
+                    [str(exc)],
+                )
+            constraints = self._effective_constraints(
+                chunk[0][0],
+                include_current_page=False,
+            )
+            glossary_entries = list(constraints["glossary"]["entries"])
+
+    def _merge_glossary_candidates(
+        self,
+        fence: AttemptFence,
+        candidates: list[Mapping[str, Any]],
+    ) -> int:
+        """Best-effort merge of glossary terms proposed during a job."""
+
+        try:
+            normalized = _normalize_term_candidates(list(candidates))
+        except ValueError as exc:
+            LOGGER.warning("术语候选格式无效，已跳过：%s", exc)
+            return 0
+        if not normalized:
+            return 0
+        for _attempt in range(3):
+            with self.engine.begin() as connection:
+                book_id = connection.execute(
+                    select(jobs.c.book_id).where(jobs.c.id == fence.job_id)
+                ).scalar_one_or_none()
+                if book_id is None:
+                    return 0
+                current = connection.execute(
+                    select(
+                        translation_constraints.c.payload_json,
+                        translation_constraints.c.revision,
+                    ).where(translation_constraints.c.book_id == book_id)
+                ).mappings().one_or_none()
+                if current is None:
+                    return 0
+                try:
+                    merged, added = with_glossary_delta(
+                        validate_translation_constraints(
+                            json.loads(current["payload_json"])
+                        ),
+                        normalized,
+                    )
+                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                    LOGGER.warning("术语表数据无效，已跳过写入：%s", exc)
+                    return 0
+                if added == 0:
+                    return 0
+                changed = connection.execute(
+                    update(translation_constraints)
+                    .where(
+                        translation_constraints.c.book_id == book_id,
+                        translation_constraints.c.revision == current["revision"],
+                    )
+                    .values(
+                        payload_json=_json(merged),
+                        revision=int(current["revision"]) + 1,
+                        updated_at=utcnow(),
+                    )
+                )
+                if changed.rowcount == 1:
+                    return added
+            time.sleep(0.05)
+        LOGGER.warning("高质量翻译术语表写入冲突，已跳过本批术语")
+        return 0
 
     def _detect(
         self,
@@ -2334,17 +2583,7 @@ class TranslationPipelineService:
         step: Mapping[str, Any],
         page_id: str,
     ) -> Mapping[str, Any]:
-        snapshot = self._snapshot(page_id)
         config = self._config(step)
-        all_texts = [
-            _payload_text(
-                payload,
-                "originalText",
-                label="persisted original text",
-            ).strip()
-            for payload in snapshot.bubbles
-        ]
-        texts = [text for text in all_texts if text]
         effective_before = self._effective_constraints(
             step,
             include_current_page=False,
@@ -2357,39 +2596,91 @@ class TranslationPipelineService:
             or baseline_revision < 0
         ):
             raise JobConflict("translation constraint revision is invalid")
-        if not bool(glossary["autoExtractEnabled"]) or not texts:
+
+        def skip(reason: str, message: str) -> Mapping[str, Any]:
             checkpoint = {
                 "baselineRevision": baseline_revision,
                 "candidateCount": 0,
                 "duplicateCount": 0,
                 "addedCount": 0,
                 "delta": [],
-                "skipped": (
-                    "disabled"
-                    if not bool(glossary["autoExtractEnabled"])
-                    else "no_ocr_text"
-                ),
+                "skipped": reason,
             }
             self.jobs.complete_step(
                 fence,
                 step_id=str(step["stepId"]),
                 checkpoint=checkpoint,
             )
-            log_result(
-                "术语提取已跳过",
-                (
-                    "原因：未启用自动术语提取"
-                    if checkpoint["skipped"] == "disabled"
-                    else "原因：本页没有可用的 OCR 文本",
-                ),
-            )
+            log_result("术语提取已跳过", message)
             return checkpoint
+
+        if bool(glossary["hqAutoFillEnabled"]):
+            return skip(
+                "hq_auto_fill_enabled",
+                "原因：已启用高质量翻译同时填写术语表",
+            )
+        if config.get("mode") == "hq":
+            return skip(
+                "hq_batch_mode",
+                "原因：高质量翻译由批次统一提取术语",
+            )
+        if not bool(glossary["autoExtractEnabled"]):
+            return skip("disabled", "原因：未启用自动术语提取")
+
+        batch_pages = 1
+        job_id = step.get("jobId")
+        if not isinstance(job_id, str) or not job_id:
+            raise JobConflict("translation job ID is invalid")
+        with self.engine.connect() as connection:
+            job_page_ids = [
+                str(value)
+                for value in connection.execute(
+                    select(job_items.c.page_id)
+                    .where(
+                        job_items.c.job_id == job_id,
+                        job_items.c.page_id.is_not(None),
+                    )
+                    .order_by(job_items.c.ordinal)
+                ).scalars()
+            ]
+        if page_id not in job_page_ids:
+            job_page_ids = [page_id]
+        page_index = job_page_ids.index(page_id)
+        if batch_pages > 1 and page_index % batch_pages != 0:
+            return skip(
+                "batched",
+                f"原因：术语按每 {batch_pages} 页一批提取，本页由批次首页处理",
+            )
+        batch_page_ids = job_page_ids[page_index : page_index + batch_pages]
+
+        texts_by_page: list[dict[str, Any]] = []
+        for batch_page_id in batch_page_ids:
+            batch_snapshot = self._snapshot(batch_page_id)
+            page_texts = [
+                _payload_text(
+                    payload,
+                    "originalText",
+                    label="persisted original text",
+                ).strip()
+                for payload in batch_snapshot.bubbles
+            ]
+            page_texts = [text for text in page_texts if text]
+            if page_texts:
+                texts_by_page.append(
+                    {
+                        "page": job_page_ids.index(batch_page_id) + 1,
+                        "texts": page_texts,
+                    }
+                )
+        if not texts_by_page:
+            return skip("no_ocr_text", "原因：本批次没有可用的 OCR 文本")
 
         section = self._with_credential(config.get("translation"))
         result = self.algorithms.extract_terms(
-            texts,
+            texts_by_page,
             section,
             prompt=str(glossary["autoExtractPrompt"]),
+            glossary_entries=glossary["entries"],
         )
         result = _require_result_mapping(
             result,

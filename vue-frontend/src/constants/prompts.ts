@@ -59,4 +59,5 @@ export function inferPaddleOcrVlPromptLanguage(
 export const DEFAULT_HQ_TRANSLATE_PROMPT = promptDefaults.hqTranslation
 export const DEFAULT_PROOFREADING_PROMPT = promptDefaults.proofreading
 export const DEFAULT_AUTO_GLOSSARY_PROMPT = promptDefaults.autoGlossary
+export const DEFAULT_HQ_GLOSSARY_PROMPT = promptDefaults.hqGlossary
 export const DEFAULT_WEB_IMPORT_EXTRACTION_PROMPT = promptDefaults.webImportExtraction

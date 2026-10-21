@@ -727,7 +727,6 @@ def step_kinds_for_mode(
             "detect",
             "ocr",
             "color",
-            "auto_terms",
             "hq_translate",
             "repair",
             "render",

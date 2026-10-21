@@ -5217,6 +5217,9 @@ export interface components {
             enabled: boolean;
             autoExtractEnabled: boolean;
             autoExtractPrompt: string;
+            autoExtractBatchPages: number;
+            hqAutoFillEnabled: boolean;
+            hqAutoFillPrompt: string;
             entries: components["schemas"]["TranslationGlossaryEntry"][];
         };
         TranslationNonTranslateSettings: {

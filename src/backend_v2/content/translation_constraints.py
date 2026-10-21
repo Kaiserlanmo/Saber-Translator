@@ -11,23 +11,34 @@ from src.shared.prompt_defaults import get_prompt_factory_defaults
 
 
 DEFAULT_AUTO_GLOSSARY_PROMPT = get_prompt_factory_defaults()["autoGlossary"]
+DEFAULT_HQ_GLOSSARY_PROMPT = get_prompt_factory_defaults()["hqGlossary"]
 
 _MATCH_MODES = frozenset({"text", "regex"})
 _MAX_TERM_LENGTH = 2_000
 _MAX_NOTE_LENGTH = 10_000
 _MAX_PROMPT_LENGTH = 100_000
+_AUTO_EXTRACT_BATCH_MIN = 1
+_AUTO_EXTRACT_BATCH_MAX = 50
+_AUTO_EXTRACT_BATCH_DEFAULT = 5
+
+
+def _glossary_defaults() -> dict[str, Any]:
+    return {
+        "enabled": False,
+        "autoExtractEnabled": False,
+        "autoExtractPrompt": DEFAULT_AUTO_GLOSSARY_PROMPT,
+        "autoExtractBatchPages": _AUTO_EXTRACT_BATCH_DEFAULT,
+        "hqAutoFillEnabled": False,
+        "hqAutoFillPrompt": DEFAULT_HQ_GLOSSARY_PROMPT,
+        "entries": [],
+    }
 
 
 def empty_translation_constraints() -> dict[str, Any]:
     """Return a detached canonical empty document payload."""
 
     return {
-        "glossary": {
-            "enabled": False,
-            "autoExtractEnabled": False,
-            "autoExtractPrompt": DEFAULT_AUTO_GLOSSARY_PROMPT,
-            "entries": [],
-        },
+        "glossary": _glossary_defaults(),
         "nonTranslate": {
             "enabled": False,
             "entries": [],
@@ -205,10 +216,20 @@ def validate_translation_constraints(payload: object) -> dict[str, Any]:
         expected={"glossary", "nonTranslate"},
     )
     glossary = _mapping(document["glossary"], field="glossary")
+    # 兼容旧版本已保存的术语表：新字段用默认值补齐，避免严格字段校验拒绝旧数据。
+    glossary = {**_glossary_defaults(), **glossary}
     _exact_fields(
         glossary,
         field="glossary",
-        expected={"enabled", "autoExtractEnabled", "autoExtractPrompt", "entries"},
+        expected={
+            "enabled",
+            "autoExtractEnabled",
+            "autoExtractPrompt",
+            "autoExtractBatchPages",
+            "hqAutoFillEnabled",
+            "hqAutoFillPrompt",
+            "entries",
+        },
     )
     non_translate = _mapping(document["nonTranslate"], field="nonTranslate")
     _exact_fields(
@@ -222,14 +243,42 @@ def validate_translation_constraints(payload: object) -> dict[str, Any]:
         maximum=_MAX_PROMPT_LENGTH,
         allow_empty=True,
     )
+    hq_prompt = _string(
+        glossary["hqAutoFillPrompt"],
+        field="glossary.hqAutoFillPrompt",
+        maximum=_MAX_PROMPT_LENGTH,
+        allow_empty=True,
+    )
+    batch_pages = glossary["autoExtractBatchPages"]
+    if (
+        isinstance(batch_pages, bool)
+        or not isinstance(batch_pages, int)
+        or not _AUTO_EXTRACT_BATCH_MIN <= batch_pages <= _AUTO_EXTRACT_BATCH_MAX
+    ):
+        raise ValueError(
+            "glossary.autoExtractBatchPages must be an integer from "
+            f"{_AUTO_EXTRACT_BATCH_MIN} to {_AUTO_EXTRACT_BATCH_MAX}"
+        )
+    auto_extract_enabled = _boolean(
+        glossary["autoExtractEnabled"],
+        field="glossary.autoExtractEnabled",
+    )
+    hq_auto_fill_enabled = _boolean(
+        glossary["hqAutoFillEnabled"],
+        field="glossary.hqAutoFillEnabled",
+    )
+    # 两种填表方式互斥：高质量翻译同时填表时，关闭本地/批量自动提取，
+    # 避免并行页面同时写入造成重复或矛盾。
+    if hq_auto_fill_enabled:
+        auto_extract_enabled = False
     return {
         "glossary": {
             "enabled": _boolean(glossary["enabled"], field="glossary.enabled"),
-            "autoExtractEnabled": _boolean(
-                glossary["autoExtractEnabled"],
-                field="glossary.autoExtractEnabled",
-            ),
+            "autoExtractEnabled": auto_extract_enabled,
             "autoExtractPrompt": prompt,
+            "autoExtractBatchPages": batch_pages,
+            "hqAutoFillEnabled": hq_auto_fill_enabled,
+            "hqAutoFillPrompt": hq_prompt,
             "entries": _glossary_entries(glossary["entries"]),
         },
         "nonTranslate": {
